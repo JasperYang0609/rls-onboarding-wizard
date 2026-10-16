@@ -1,18 +1,27 @@
 # RLS Baseline
 
-## v1 Scope
+## v1.1 Scope
 
-Handle only OpenClaw internal database / knowledge / records read permissions.
-Manual reminders only for Discord / Notion / Google permissions.
+Handle only OpenClaw internal database / knowledge / records read-access decisions.
+This package does not create database row-level security or change Discord / Notion / Google permissions. Those source controls remain authoritative.
+
+## Decision order
+
+1. Resolve the requester from a verified Discord numeric user ID or OpenClaw sender ID.
+2. Deny if the identity is unknown, conflicting, revoked, or `pending_id`.
+3. Confirm the source system already allows the requested data.
+4. Match department, role, and data layer.
+5. Apply an active, precisely scoped, time-bounded explicit grant only when the recipient and an authorized approver are active and verified.
+6. Return the minimum necessary data; otherwise deny with the standard reply.
 
 ## Data layers
 
 1. `company_shared` / 全公司共用
    - SOP, announcements, product info, public scripts, training docs, general processes.
-   - Readable by all internal members and AI consultants.
+   - Readable by verified internal members and AI consultants.
 2. `department_general` / 部門一般
    - Department workflow, non-sensitive reports, general FAQ, normal task notes.
-   - Readable by same department. AI consultant may read for troubleshooting. Cross-department users get summary or need authorization.
+   - Readable by the same department. AI consultants need an active department assignment for troubleshooting. Cross-department users need an explicit scoped grant.
 3. `department_sensitive` / 部門敏感
    - Finance details, HR salary, customer PII, contracts, order details, credentials, medical/beauty records.
    - Readable by executive owner, department lead, or explicitly authorized members only.
@@ -22,7 +31,31 @@ Manual reminders only for Discord / Notion / Google permissions.
 - `executive_owner`: highest access. Can read all layers and manage permissions.
 - `department_lead`: read own department general and own department sensitive when that department authorizes lead access.
 - `department_member`: read company shared and own department general.
-- `ai_consultant`: read company shared and department general for troubleshooting; department sensitive denied by default unless explicitly authorized.
+- `ai_consultant`: read company shared and assigned-department general data for troubleshooting; unassigned department general and department sensitive denied by default.
+
+## Identity authority
+
+- Authoritative: verified Discord numeric user ID and/or OpenClaw sender ID mapped to one person record.
+- Informational only: display name, nickname, email address, role label, and plain-text mention.
+- A mismatch between authoritative IDs is a deny condition until manually resolved.
+- Offboarding or transfer must revoke the old mapping before applying the new one.
+- Person status is one of `active`, `pending_id`, or `revoked`; only `active` may proceed to role and data-layer evaluation.
+
+## Explicit grants
+
+An exception is valid only when all of these conditions are true:
+
+- `status` is `active`
+- recipient and approver are both active and mapped to verified authoritative IDs
+- approver is an active `executive_owner`, or an active `department_lead` of the department that owns the requested data
+- `issued_at` is not in the future, and `issued_at <= now < expires_at`
+- approver person key and recipient person key are recorded
+- department and data layer
+- exact `source_ids`, `resource_ids`, and fields
+- reason
+- issue time and expiry time
+
+Revoked, expired, future-dated, broadly scoped, wildcard-sensitive, inactive-party, or unauthorized-approver grants mean deny. A grant cannot override source-system permissions.
 
 ## Unauthorized reply
 
