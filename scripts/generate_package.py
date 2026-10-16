@@ -48,12 +48,39 @@ def lexical_absolute(path):
     return Path(os.path.abspath(os.fspath(path.expanduser())))
 
 
-def reject_symlink_components(path):
+def directory_flags():
+    flags = os.O_RDONLY
+    if hasattr(os, "O_DIRECTORY"):
+        flags |= os.O_DIRECTORY
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    return flags
+
+
+def open_directory_chain(path, create_missing=False):
+    """Open an absolute directory component-by-component without following symlinks."""
     current = Path(path.anchor)
-    for part in path.parts[1:]:
-        current /= part
-        if current.is_symlink():
-            raise ValueError(f"refusing symlinked output path component: {current}")
+    directory_fd = os.open(path.anchor, directory_flags())
+    try:
+        for part in path.parts[1:]:
+            current /= part
+            try:
+                next_fd = os.open(part, directory_flags(), dir_fd=directory_fd)
+            except FileNotFoundError:
+                if not create_missing:
+                    raise
+                os.mkdir(part, 0o700, dir_fd=directory_fd)
+                next_fd = os.open(part, directory_flags(), dir_fd=directory_fd)
+            except OSError as exc:
+                raise ValueError(
+                    f"refusing unsafe or symlinked output path component: {current}"
+                ) from exc
+            os.close(directory_fd)
+            directory_fd = next_fd
+        return directory_fd
+    except Exception:
+        os.close(directory_fd)
+        raise
 
 
 def atomic_write_at(directory_fd, name, content):
@@ -113,29 +140,37 @@ def main():
         rendered.append((name, content))
 
     try:
-        reject_symlink_components(out_dir)
-        if out_dir.exists() or out_dir.is_symlink():
-            raise ValueError(
-                "refusing to overwrite an existing output directory; generate into a new directory"
-            )
-        out_dir.parent.mkdir(parents=True, exist_ok=True)
-        reject_symlink_components(out_dir.parent)
-        out_dir.mkdir(mode=0o700)
-
-        flags = os.O_RDONLY
-        if hasattr(os, "O_DIRECTORY"):
-            flags |= os.O_DIRECTORY
-        if hasattr(os, "O_NOFOLLOW"):
-            flags |= os.O_NOFOLLOW
-        directory_fd = os.open(out_dir, flags)
+        parent_fd = open_directory_chain(out_dir.parent, create_missing=True)
+        directory_fd = None
         try:
+            try:
+                os.mkdir(out_dir.name, 0o700, dir_fd=parent_fd)
+            except FileExistsError as exc:
+                existing = os.stat(out_dir.name, dir_fd=parent_fd, follow_symlinks=False)
+                if stat.S_ISLNK(existing.st_mode):
+                    raise ValueError(
+                        f"refusing unsafe or symlinked output path component: {out_dir}"
+                    ) from exc
+                raise ValueError(
+                    "refusing to overwrite an existing output directory; generate into a new directory"
+                ) from exc
+
+            directory_fd = os.open(out_dir.name, directory_flags(), dir_fd=parent_fd)
             opened = os.fstat(directory_fd)
-            named = os.lstat(out_dir)
+            named = os.stat(out_dir.name, dir_fd=parent_fd, follow_symlinks=False)
             if not stat.S_ISDIR(opened.st_mode) or (
                 opened.st_dev,
                 opened.st_ino,
             ) != (named.st_dev, named.st_ino):
                 raise ValueError("output directory changed during generation")
+        except Exception:
+            if directory_fd is not None:
+                os.close(directory_fd)
+            raise
+        finally:
+            os.close(parent_fd)
+
+        try:
             for name, content in rendered:
                 atomic_write_at(directory_fd, name, content)
             os.fsync(directory_fd)

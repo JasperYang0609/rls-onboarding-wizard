@@ -65,6 +65,20 @@ class GeneratePackageTests(unittest.TestCase):
                     "cross_department_requires_explicit_grant"
                 ]
             )
+            self.assertTrue(
+                payload["authorization_invariants"]["minimum_necessary_fields_only"]
+            )
+            identity_rules = payload["identity_rules"]
+            for identity_default in (
+                "unknown_default",
+                "pending_id_default",
+                "conflicting_id_default",
+                "revoked_id_default",
+            ):
+                self.assertEqual(
+                    identity_rules[identity_default],
+                    "deny_all_governed_internal_data",
+                )
             grant_rules = payload["grant_rules"]
             self.assertEqual(grant_rules["valid_status"], "active")
             self.assertEqual(
@@ -79,12 +93,36 @@ class GeneratePackageTests(unittest.TestCase):
             self.assertTrue(grant_rules["recipient_must_be_active_and_verified"])
             self.assertTrue(grant_rules["approver_must_be_active_and_verified"])
             self.assertTrue(grant_rules["issued_at_not_in_future"])
+            self.assertTrue(grant_rules["expires_at_required"])
+            self.assertTrue(grant_rules["expires_after_issued_at"])
             self.assertEqual(
                 payload["roles"]["ai_consultant"]["can_read"],
                 ["company_shared", "assigned_department_general"],
             )
             for generated in out.iterdir():
                 self.assertNotIn("{{", generated.read_text(encoding="utf-8"))
+
+            addendum = (out / "AGENTS_rls_addendum.md").read_text(encoding="utf-8")
+            self.assertIn("狀態為 active", addendum)
+            self.assertIn("最高管理層或該資料所屬部門主管", addendum)
+            self.assertIn("來源、資源、欄位", addendum)
+            self.assertIn("已撤銷、過期、尚未生效", addendum)
+            self.assertIn("敏感資料使用萬用範圍", addendum)
+
+            checklist = (out / "onsite_rls_checklist.md").read_text(encoding="utf-8")
+            self.assertIn("最高管理層或資料所屬部門主管", checklist)
+            self.assertIn("來源、資源與必要欄位", checklist)
+            self.assertIn("revoked、expired、future-dated、inactive-party、wrong-approver", checklist)
+
+            negative_cases = (out / "rls_test_cases.md").read_text(encoding="utf-8")
+            for required_case in (
+                "已撤銷、已到期、尚未生效或欄位不完整",
+                "核准者或對象不是 active 且 verified",
+                "非最高管理層、也不是資料所屬部門主管",
+                "敏感資料授權使用萬用來源、資源或欄位",
+                "OpenClaw 規則允許但來源平台拒絕",
+            ):
+                self.assertIn(required_case, negative_cases)
 
     def test_rejects_path_traversal_slug(self):
         with self.temporary_directory() as temp_dir:
