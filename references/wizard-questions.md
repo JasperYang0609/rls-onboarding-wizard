@@ -28,6 +28,7 @@ For each department, finish before moving on:
 7. 哪些資料屬於部門敏感？
 8. 是否有跨部門協作資料？指定主責部門與協作部門摘要/必要欄位。
 9. 寫入 matrix 後，列出正向、wrong-role、跨部門、revoked-ID、pending-ID 測試。
+10. 若需要臨時授權，確認核准者是否為最高管理層或資料所屬部門主管，並逐一指定來源、資源、必要欄位與有效時間；敏感資料不得使用萬用範圍。
 
 ## Permission change checklist
 
@@ -39,3 +40,4 @@ For offboarding, transfer, promotion:
 - Test new access works.
 - Test old sensitive access no longer works.
 - If IDs mismatch, set status `pending_id` and pause sensitive access.
+- Revoke all grants whose recipient, approver, department ownership, or required resource scope is no longer valid.

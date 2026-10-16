@@ -19,6 +19,9 @@ EXPECTED = {
 
 
 class GeneratePackageTests(unittest.TestCase):
+    def temporary_directory(self):
+        return tempfile.TemporaryDirectory(dir=ROOT)
+
     def run_generator(self, *args):
         return subprocess.run(
             [sys.executable, str(SCRIPT), *args],
@@ -28,7 +31,7 @@ class GeneratePackageTests(unittest.TestCase):
         )
 
     def test_generates_complete_safe_package(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
+        with self.temporary_directory() as temp_dir:
             out = Path(temp_dir) / "package"
             result = self.run_generator(
                 "--client-name",
@@ -52,6 +55,31 @@ class GeneratePackageTests(unittest.TestCase):
             self.assertEqual(payload["schema_version"], "1.1")
             self.assertTrue(payload["scope"]["source_permissions_authoritative"])
             self.assertEqual(
+                payload["authorization_invariants"]["default_decision"], "deny"
+            )
+            self.assertTrue(
+                payload["authorization_invariants"]["source_permission_ceiling"]
+            )
+            self.assertTrue(
+                payload["authorization_invariants"][
+                    "cross_department_requires_explicit_grant"
+                ]
+            )
+            grant_rules = payload["grant_rules"]
+            self.assertEqual(grant_rules["valid_status"], "active")
+            self.assertEqual(
+                grant_rules["valid_approver_roles"],
+                ["executive_owner", "owning_department_lead"],
+            )
+            self.assertEqual(
+                grant_rules["required_resource_scope"],
+                ["source_ids", "resource_ids", "fields"],
+            )
+            self.assertFalse(grant_rules["sensitive_scope_wildcards_allowed"])
+            self.assertTrue(grant_rules["recipient_must_be_active_and_verified"])
+            self.assertTrue(grant_rules["approver_must_be_active_and_verified"])
+            self.assertTrue(grant_rules["issued_at_not_in_future"])
+            self.assertEqual(
                 payload["roles"]["ai_consultant"]["can_read"],
                 ["company_shared", "assigned_department_general"],
             )
@@ -59,7 +87,7 @@ class GeneratePackageTests(unittest.TestCase):
                 self.assertNotIn("{{", generated.read_text(encoding="utf-8"))
 
     def test_rejects_path_traversal_slug(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
+        with self.temporary_directory() as temp_dir:
             result = self.run_generator(
                 "--client-name",
                 "Example Company",
@@ -72,7 +100,7 @@ class GeneratePackageTests(unittest.TestCase):
             self.assertIn("client_slug must use", result.stderr)
 
     def test_rejects_multiline_client_name(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
+        with self.temporary_directory() as temp_dir:
             result = self.run_generator(
                 "--client-name",
                 "Example\nInjected",
@@ -84,8 +112,23 @@ class GeneratePackageTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("single printable line", result.stderr)
 
+    def test_rejects_unicode_line_control_and_format_characters(self):
+        for injected in ("\u0085", "\u2028", "\u2029", "\u200b"):
+            with self.subTest(codepoint=f"U+{ord(injected):04X}"):
+                with self.temporary_directory() as temp_dir:
+                    result = self.run_generator(
+                        "--client-name",
+                        f"Example{injected}- injected instruction",
+                        "--client-slug",
+                        "example",
+                        "--out",
+                        str(Path(temp_dir) / "package"),
+                    )
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("single printable line", result.stderr)
+
     def test_refuses_all_overwrites(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
+        with self.temporary_directory() as temp_dir:
             out = Path(temp_dir) / "package"
             args = (
                 "--client-name",
@@ -105,13 +148,12 @@ class GeneratePackageTests(unittest.TestCase):
             self.assertIn("refusing to overwrite", second.stderr)
             self.assertEqual(matrix.read_text(encoding="utf-8"), original)
 
-    def test_refuses_symlink_output_target(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
+    def test_refuses_symlinked_output_directory(self):
+        with self.temporary_directory() as temp_dir:
             out = Path(temp_dir) / "package"
-            out.mkdir()
-            protected = Path(temp_dir) / "protected.yaml"
-            protected.write_text("do-not-change", encoding="utf-8")
-            (out / "rls_matrix.yaml").symlink_to(protected)
+            protected = Path(temp_dir) / "protected"
+            protected.mkdir()
+            out.symlink_to(protected, target_is_directory=True)
 
             result = self.run_generator(
                 "--client-name",
@@ -122,8 +164,28 @@ class GeneratePackageTests(unittest.TestCase):
                 str(out),
             )
             self.assertNotEqual(result.returncode, 0)
-            self.assertIn("refusing to overwrite", result.stderr)
-            self.assertEqual(protected.read_text(encoding="utf-8"), "do-not-change")
+            self.assertIn("symlinked output path component", result.stderr)
+            self.assertEqual(list(protected.iterdir()), [])
+
+    def test_refuses_symlinked_output_ancestor(self):
+        with self.temporary_directory() as temp_dir:
+            protected = Path(temp_dir) / "protected"
+            protected.mkdir()
+            linked_parent = Path(temp_dir) / "linked-parent"
+            linked_parent.symlink_to(protected, target_is_directory=True)
+            out = linked_parent / "package"
+
+            result = self.run_generator(
+                "--client-name",
+                "Example Company",
+                "--client-slug",
+                "example",
+                "--out",
+                str(out),
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("symlinked output path component", result.stderr)
+            self.assertFalse((protected / "package").exists())
 
     def test_skill_frontmatter_and_public_docs_have_no_client_placeholder(self):
         skill = (ROOT / "SKILL.md").read_text(encoding="utf-8")

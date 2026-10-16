@@ -11,7 +11,7 @@ This package does not create database row-level security or change Discord / Not
 2. Deny if the identity is unknown, conflicting, revoked, or `pending_id`.
 3. Confirm the source system already allows the requested data.
 4. Match department, role, and data layer.
-5. Apply a scoped, unexpired explicit grant only when all grant fields are present.
+5. Apply an active, precisely scoped, time-bounded explicit grant only when the recipient and an authorized approver are active and verified.
 6. Return the minimum necessary data; otherwise deny with the standard reply.
 
 ## Data layers
@@ -43,15 +43,19 @@ This package does not create database row-level security or change Discord / Not
 
 ## Explicit grants
 
-An exception is valid only when it records:
+An exception is valid only when all of these conditions are true:
 
-- approver ID
-- recipient person key
+- `status` is `active`
+- recipient and approver are both active and mapped to verified authoritative IDs
+- approver is an active `executive_owner`, or an active `department_lead` of the department that owns the requested data
+- `issued_at` is not in the future, and `issued_at <= now < expires_at`
+- approver person key and recipient person key are recorded
 - department and data layer
+- exact `source_ids`, `resource_ids`, and fields
 - reason
 - issue time and expiry time
 
-Missing or expired fields mean deny. A grant cannot override source-system permissions.
+Revoked, expired, future-dated, broadly scoped, wildcard-sensitive, inactive-party, or unauthorized-approver grants mean deny. A grant cannot override source-system permissions.
 
 ## Unauthorized reply
 

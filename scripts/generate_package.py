@@ -3,7 +3,9 @@ import argparse
 import json
 import os
 import re
-import tempfile
+import stat
+import unicodedata
+from secrets import token_hex
 from pathlib import Path
 
 TEMPLATES = [
@@ -26,7 +28,11 @@ def single_line(value, field, max_length=120):
         raise ValueError(f"{field} must not be empty")
     if len(value) > max_length:
         raise ValueError(f"{field} must be at most {max_length} characters")
-    if any(ord(char) < 32 or ord(char) == 127 for char in value):
+    if any(
+        (char.isspace() and char != " ")
+        or unicodedata.category(char).startswith("C")
+        for char in value
+    ):
         raise ValueError(f"{field} must be a single printable line")
     return value
 
@@ -38,19 +44,33 @@ def safe_slug(value):
     return value
 
 
-def atomic_write(path, content):
-    if path.is_symlink():
-        raise ValueError(f"refusing to write through symlink: {path}")
-    fd, temp_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+def lexical_absolute(path):
+    return Path(os.path.abspath(os.fspath(path.expanduser())))
+
+
+def reject_symlink_components(path):
+    current = Path(path.anchor)
+    for part in path.parts[1:]:
+        current /= part
+        if current.is_symlink():
+            raise ValueError(f"refusing symlinked output path component: {current}")
+
+
+def atomic_write_at(directory_fd, name, content):
+    temp_name = f".{name}.{token_hex(8)}"
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    fd = os.open(temp_name, flags, 0o600, dir_fd=directory_fd)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             handle.write(content)
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(temp_name, path)
+        os.replace(temp_name, name, src_dir_fd=directory_fd, dst_dir_fd=directory_fd)
     except Exception:
         try:
-            os.unlink(temp_name)
+            os.unlink(temp_name, dir_fd=directory_fd)
         except FileNotFoundError:
             pass
         raise
@@ -72,7 +92,9 @@ def main():
 
     skill_dir = Path(__file__).resolve().parents[1]
     template_dir = skill_dir / "assets" / "templates"
-    out_dir = Path(args.out).expanduser() if args.out else Path.cwd() / "records" / client_slug
+    out_dir = lexical_absolute(
+        Path(args.out) if args.out else Path.cwd() / "records" / client_slug
+    )
     values = {
         "client_name": client_name,
         "client_slug": client_slug,
@@ -85,27 +107,46 @@ def main():
     rendered = []
     for name in TEMPLATES:
         src = template_dir / f"{name}.tpl"
-        dst = out_dir / name
         content = render(src.read_text(encoding="utf-8"), values)
         if re.search(r"{{[a-zA-Z0-9_]+}}", content):
             raise SystemExit(f"unresolved template variable in {src.name}")
-        rendered.append((dst, content))
+        rendered.append((name, content))
 
-    existing = [dst for dst, _ in rendered if dst.exists() or dst.is_symlink()]
-    if existing:
-        names = ", ".join(path.name for path in existing)
-        raise SystemExit(
-            "refusing to overwrite existing files; generate into a new directory and review the diff: "
-            f"{names}"
-        )
+    try:
+        reject_symlink_components(out_dir)
+        if out_dir.exists() or out_dir.is_symlink():
+            raise ValueError(
+                "refusing to overwrite an existing output directory; generate into a new directory"
+            )
+        out_dir.parent.mkdir(parents=True, exist_ok=True)
+        reject_symlink_components(out_dir.parent)
+        out_dir.mkdir(mode=0o700)
 
-    out_dir.mkdir(parents=True, exist_ok=True)
-    for dst, content in rendered:
-        atomic_write(dst, content)
+        flags = os.O_RDONLY
+        if hasattr(os, "O_DIRECTORY"):
+            flags |= os.O_DIRECTORY
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        directory_fd = os.open(out_dir, flags)
+        try:
+            opened = os.fstat(directory_fd)
+            named = os.lstat(out_dir)
+            if not stat.S_ISDIR(opened.st_mode) or (
+                opened.st_dev,
+                opened.st_ino,
+            ) != (named.st_dev, named.st_ino):
+                raise ValueError("output directory changed during generation")
+            for name, content in rendered:
+                atomic_write_at(directory_fd, name, content)
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    except (OSError, ValueError) as exc:
+        raise SystemExit(str(exc)) from exc
 
     print("Generated RLS package:")
-    for p, _ in rendered:
-        print(f"- {p}")
+    for name, _ in rendered:
+        print(f"- {out_dir / name}")
 
 if __name__ == "__main__":
     main()

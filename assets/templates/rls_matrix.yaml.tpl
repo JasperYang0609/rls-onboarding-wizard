@@ -19,6 +19,23 @@ identity_rules:
   conflicting_id_default: deny_all_governed_internal_data
   revoked_id_default: deny_all_governed_internal_data
 
+authorization_invariants:
+  default_decision: deny
+  source_permission_ceiling: true
+  cross_department_requires_explicit_grant: true
+  minimum_necessary_fields_only: true
+
+grant_rules:
+  valid_status: active
+  recipient_must_be_active_and_verified: true
+  approver_must_be_active_and_verified: true
+  issued_at_not_in_future: true
+  expires_at_required: true
+  expires_after_issued_at: true
+  valid_approver_roles: [executive_owner, owning_department_lead]
+  required_resource_scope: [source_ids, resource_ids, fields]
+  sensitive_scope_wildcards_allowed: false
+
 roles:
   executive_owner:
     label: 最高管理層
@@ -67,6 +84,10 @@ departments: []
 #   recipient_person_key: person-001
 #   department: operations
 #   data_layer: department_sensitive
+#   resource_scope:
+#     source_ids: [notion-operations]
+#     resource_ids: [project-alpha]
+#     fields: [status, owner, due_date]
 #   reason: "Time-bounded task"
 #   issued_at: "2026-01-01T00:00:00Z"
 #   expires_at: "2026-01-02T00:00:00Z"

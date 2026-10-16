@@ -27,7 +27,7 @@ Display names, nicknames, email addresses, and plain-text mentions are not autho
 
 - `company_shared`: verified internal members and AI consultants
 - `department_general`: members of that department; AI consultants only while assigned to that department
-- `department_sensitive`: executive owner, that department's lead, or a scoped and unexpired explicit grant
+- `department_sensitive`: executive owner, that department's lead, or an active, precisely scoped, time-bounded grant approved by one of those roles
 
 ## Install
 
@@ -54,7 +54,7 @@ The default output is `records/<client-slug>/` and contains:
 - `rls_test_cases.md`
 - `manual_platform_permissions.md`
 
-The generator refuses unsafe slugs, multiline identity labels, symlink targets, and all existing output files. To update a package, generate into a new directory, review the diff, and preserve the previous version.
+The generator rejects unsafe slugs, Unicode line/control injection, symlinked output paths, and every existing output directory. It writes through a verified directory handle. To update a package, generate into a new directory, review the diff, and preserve the previous version.
 
 ## Onboarding gate
 
@@ -63,7 +63,7 @@ Do not mark an installation ready until:
 - every person has verified numeric IDs or remains `pending_id`
 - every data source is assigned to one of the three layers
 - department and role mappings are complete
-- wrong-role, cross-department, revoked-ID, pending-ID, expired-grant, and source-denial tests pass
+- wrong-role, cross-department, revoked-ID, pending-ID, revoked/future/expired/wrong-approver/broad-grant, and source-denial tests pass
 - source-system permissions have been checked separately
 
 See [SKILL.md](SKILL.md), [the baseline](references/baseline.md), and [the wizard questions](references/wizard-questions.md) for the complete workflow.

@@ -46,7 +46,7 @@ This is a defense-in-depth workflow, not database row-level security. Do not aut
 - Data owner is not a formal role in v1; use it only as a plain-language authorization concept.
 - AI consultant can read company shared knowledge and assigned-department general data for troubleshooting; unassigned department general and all department sensitive data are denied by default.
 - Executive owner can read all layers and manage permissions.
-- Explicit exceptions must identify the approver, person, department, data layer, reason, and expiry. Expired or incomplete grants do not authorize access.
+- Explicit exceptions authorize access only when status is active; recipient and approver are active with verified IDs; the approver is an executive owner or the owning department lead; issue/expiry times are valid; and exact source, resource, and necessary fields are listed. Revoked, future-dated, expired, wildcard-sensitive, or incomplete grants do not authorize access.
 - OpenClaw-side rules never expand access beyond the source database, Discord, Notion, Drive, or other authoritative platform permissions.
 - Personalization writes are allowed for self: tone, style, persona preference, personal non-sensitive memory.
 - Official data writes are not part of v1 main flow.
